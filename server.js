@@ -26,7 +26,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",   // local frontend
-      "https://aavaaram-demo.netlify.app" // deployed frontend
+      "https://aavaramdemo.netlify.app" // deployed frontend
     ],
     credentials: true,
   })
