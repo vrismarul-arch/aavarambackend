@@ -12,7 +12,7 @@ mongoose.connect(process.env.MONGO_URI)
 
   await Admin.create({
     name: "Super Admin",
-    email: "admin@gmail.com",
+    email: "admin2@gmail.com",
     password: hashed
   });
 
