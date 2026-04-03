@@ -1,31 +1,27 @@
-// adminRoutes.js or wherever loginAdmin is defined
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+import Admin from "../models/Admin.js";
 
-/* ADMIN LOGIN */
+/* ADMIN LOGIN - Database Version */
 export const loginAdmin = async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    // Debug logging (remove in production)
     console.log('🔐 Admin login attempt for email:', email);
-    console.log('📧 Expected email:', process.env.ADMIN_EMAIL);
     
-    // Check if credentials exist in environment
-    if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD) {
-      console.error('❌ Admin credentials not configured in .env file');
-      return res.status(500).json({ 
-        message: "Server configuration error. Please check environment variables." 
-      });
-    }
+    // Check if admin exists in database
+    const admin = await Admin.findOne({ email });
     
-    // Validate credentials
-    if (email !== process.env.ADMIN_EMAIL) {
-      console.log('❌ Email mismatch');
+    if (!admin) {
+      console.log('❌ Admin not found');
       return res.status(401).json({ message: "Invalid credentials" });
     }
     
-    if (password !== process.env.ADMIN_PASSWORD) {
-      console.log('❌ Password mismatch');
+    // Compare password
+    const isPasswordValid = await bcrypt.compare(password, admin.password);
+    
+    if (!isPasswordValid) {
+      console.log('❌ Invalid password');
       return res.status(401).json({ message: "Invalid credentials" });
     }
     
@@ -33,7 +29,11 @@ export const loginAdmin = async (req, res) => {
     
     // Generate JWT token
     const token = jwt.sign(
-      { role: "admin", email: process.env.ADMIN_EMAIL },
+      { 
+        id: admin._id,
+        role: admin.role || "admin", 
+        email: admin.email 
+      },
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
@@ -41,7 +41,12 @@ export const loginAdmin = async (req, res) => {
     // Send response
     res.json({ 
       token,
-      message: "Login successful" 
+      message: "Login successful",
+      admin: {
+        id: admin._id,
+        name: admin.name,
+        email: admin.email
+      }
     });
     
   } catch (error) {

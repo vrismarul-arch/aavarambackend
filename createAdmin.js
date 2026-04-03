@@ -5,19 +5,44 @@ import Admin from "./models/Admin.js";
 
 dotenv.config();
 
-mongoose.connect(process.env.MONGO_URI)
-.then(async () => {
+const createAdmin = async () => {
+  try {
+    // Connect to MongoDB
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log("✅ Connected to MongoDB");
 
-  const hashed = await bcrypt.hash("admin123", 10);
+    // Check if admin already exists
+    const existingAdmin = await Admin.findOne({ email: "admin1@gmail.com" });
+    
+    if (existingAdmin) {
+      console.log("⚠️ Admin already exists!");
+      console.log("📧 Email:", existingAdmin.email);
+      console.log("🆔 ID:", existingAdmin._id);
+      process.exit();
+    }
 
-  await Admin.create({
-    name: "Super Admin",
-    email: "admin2@gmail.com",
-    password: hashed
-  });
+    // Hash the password
+    const hashedPassword = await bcrypt.hash("admin123", 10);
 
-  console.log("✅ Admin Created Successfully");
-  process.exit();
+    // Create admin user
+    const admin = await Admin.create({
+      name: "Super Admin",
+      email: "admin1@gmail.com",
+      password: hashedPassword,
+      role: "admin" // Add role if your schema has it
+    });
 
-})
-.catch(err => console.log(err));
+    console.log("✅ Admin Created Successfully!");
+    console.log("📧 Email:", admin.email);
+    console.log("🔑 Password: admin123");
+    console.log("🆔 Admin ID:", admin._id);
+    
+    process.exit();
+
+  } catch (error) {
+    console.error("❌ Error creating admin:", error);
+    process.exit(1);
+  }
+};
+
+createAdmin();
