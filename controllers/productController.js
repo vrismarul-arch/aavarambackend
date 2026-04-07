@@ -1,543 +1,430 @@
 import Product from "../models/Product.js";
 import supabase from "../config/supabase.js";
 
-/* ================= GET ALL PRODUCTS ================= */
+/* ─────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────── */
+const formatProduct = (product) => ({
+  ...product.toObject(),
+  mainImage: product.mainImage || product.image || "",
+  subImages: product.subImages || [],
+  allImages: [product.mainImage || product.image, ...(product.subImages || [])].filter(Boolean),
+  // Normalize: always expose arrays
+  categories: product.categories?.length
+    ? product.categories
+    : product.category
+    ? [product.category]
+    : [],
+  healthTypes: product.healthTypes?.length
+    ? product.healthTypes
+    : product.healthType
+    ? [product.healthType]
+    : ["health"],
+});
+
+const uploadToSupabase = async (file, folder) => {
+  const fileExt = file.originalname.split(".").pop();
+  const fileName = `${folder}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+  const { error } = await supabase.storage
+    .from("products")
+    .upload(fileName, file.buffer, { contentType: file.mimetype, cacheControl: "3600" });
+
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+
+  const { data } = supabase.storage.from("products").getPublicUrl(fileName);
+  return data.publicUrl;
+};
+
+const populateProduct = (query) =>
+  query.populate("category").populate("categories");
+
+/* ─────────────────────────────────────────
+   GET ALL PRODUCTS
+───────────────────────────────────────── */
 export const getProducts = async (req, res) => {
   try {
-    const products = await Product.find()
-      .populate("category")
-      .sort({ createdAt: -1 });
-    
-    // Format products for backward compatibility
-    const formattedProducts = products.map(product => ({
-      ...product.toObject(),
-      mainImage: product.mainImage || product.image || "",
-      subImages: product.subImages || [],
-      allImages: [product.mainImage || product.image, ...(product.subImages || [])].filter(Boolean)
-    }));
-    
-    res.json(formattedProducts);
+    const products = await populateProduct(
+      Product.find().sort({ createdAt: -1 })
+    );
+    res.json(products.map(formatProduct));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= GET SINGLE PRODUCT ================= */
+/* ─────────────────────────────────────────
+   GET SINGLE PRODUCT
+───────────────────────────────────────── */
 export const getProductById = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id).populate("category");
-
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
-
-    const formattedProduct = {
-      ...product.toObject(),
-      mainImage: product.mainImage || product.image || "",
-      subImages: product.subImages || [],
-      allImages: [product.mainImage || product.image, ...(product.subImages || [])].filter(Boolean)
-    };
-
-    res.json(formattedProduct);
+    const product = await populateProduct(Product.findById(req.params.id));
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    res.json(formatProduct(product));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= GET PRODUCTS BY CATEGORY ================= */
+/* ─────────────────────────────────────────
+   GET BY CATEGORY
+───────────────────────────────────────── */
 export const getProductsByCategory = async (req, res) => {
   try {
-    const products = await Product.find({
-      category: req.params.categoryId,
-    }).populate("category");
-
-    const formattedProducts = products.map(product => ({
-      ...product.toObject(),
-      mainImage: product.mainImage || product.image || "",
-      subImages: product.subImages || [],
-      allImages: [product.mainImage || product.image, ...(product.subImages || [])].filter(Boolean)
-    }));
-
-    res.json(formattedProducts);
+    const products = await populateProduct(
+      Product.find({
+        $or: [
+          { categories: req.params.categoryId },
+          { category: req.params.categoryId },
+        ],
+      })
+    );
+    res.json(products.map(formatProduct));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= GET BESTSELLERS ================= */
+/* ─────────────────────────────────────────
+   GET BESTSELLERS
+───────────────────────────────────────── */
 export const getBestsellers = async (req, res) => {
   try {
-    const products = await Product.find({ bestSeller: true })
-      .populate("category")
-      .limit(10);
-
-    const formattedProducts = products.map(product => ({
-      ...product.toObject(),
-      mainImage: product.mainImage || product.image || "",
-      subImages: product.subImages || []
-    }));
-
-    res.json(formattedProducts);
+    const products = await populateProduct(
+      Product.find({ bestSeller: true }).limit(10)
+    );
+    res.json(products.map(formatProduct));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= GET PRODUCTS BY HEALTH TYPE ================= */
+/* ─────────────────────────────────────────
+   GET BY HEALTH TYPE
+───────────────────────────────────────── */
 export const getProductsByHealthType = async (req, res) => {
   try {
-    const { type } = req.params;
-    const products = await Product.find({ healthType: type })
-      .populate("category")
-      .limit(20);
-
-    const formattedProducts = products.map(product => ({
-      ...product.toObject(),
-      mainImage: product.mainImage || product.image || "",
-      subImages: product.subImages || []
-    }));
-
-    res.json(formattedProducts);
+    const products = await populateProduct(
+      Product.find({
+        $or: [
+          { healthTypes: req.params.type },
+          { healthType: req.params.type },
+        ],
+      }).limit(20)
+    );
+    res.json(products.map(formatProduct));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= CREATE PRODUCT ================= */
+/* ─────────────────────────────────────────
+   PARSE MULTI-VALUE FIELDS
+───────────────────────────────────────── */
+const parseArrayField = (value, fallback = []) => {
+  if (!value) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    return fallback;
+  }
+};
+
+/* ─────────────────────────────────────────
+   CREATE PRODUCT
+───────────────────────────────────────── */
 export const createProduct = async (req, res) => {
   try {
     const {
-      name,
-      price,
-      category,
-      shortDescription,
-      description,
-      ingredients,
-      usage,
-      disclaimer,
-      weight,
-      dimensions,
-      bestSeller,
-      healthType,
+      name, price, category, healthType,
+      shortDescription, description,
+      ingredients, usage, disclaimer,
+      weight, dimensions, bestSeller,
     } = req.body;
 
-    let mainImageUrl = "";
-    let subImagesUrls = [];
+    // Parse multi-value fields; fall back to legacy single values
+    const categoriesArr  = parseArrayField(req.body.categories,  category   ? [category]   : []);
+    const healthTypesArr = parseArrayField(req.body.healthTypes, healthType ? [healthType] : ["health"]);
 
-    /* ===== UPLOAD MAIN IMAGE ===== */
-    if (req.files && req.files.mainImage) {
-      const file = req.files.mainImage[0];
-      const fileExt = file.originalname.split('.').pop();
-      const fileName = `main/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      
-      const { error, data } = await supabase.storage
-        .from("products")
-        .upload(fileName, file.buffer, {
-          contentType: file.mimetype,
-          cacheControl: '3600'
-        });
-
-      if (error) {
-        console.error("Main image upload error:", error);
-        return res.status(500).json({ message: `Main image upload failed: ${error.message}` });
-      }
-
-      const { data: publicUrlData } = supabase.storage
-        .from("products")
-        .getPublicUrl(fileName);
-
-      mainImageUrl = publicUrlData.publicUrl;
+    // Validation
+    if (!name || !price || !description) {
+      return res.status(400).json({ message: "Name, price and description are required." });
+    }
+    if (categoriesArr.length === 0) {
+      return res.status(400).json({ message: "At least one category is required." });
     }
 
-    /* ===== UPLOAD SUB IMAGES ===== */
-    if (req.files && req.files.subImages && req.files.subImages.length > 0) {
-      for (let i = 0; i < req.files.subImages.length; i++) {
-        const file = req.files.subImages[i];
-        const fileExt = file.originalname.split('.').pop();
-        const fileName = `sub/${Date.now()}-${i}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-        
-        const { error } = await supabase.storage
-          .from("products")
-          .upload(fileName, file.buffer, {
-            contentType: file.mimetype,
-            cacheControl: '3600'
-          });
+    // Upload main image
+    let mainImageUrl = "";
+    if (req.files?.mainImage?.[0]) {
+      mainImageUrl = await uploadToSupabase(req.files.mainImage[0], "main");
+    }
 
-        if (!error) {
-          const { data: publicUrlData } = supabase.storage
-            .from("products")
-            .getPublicUrl(fileName);
-          subImagesUrls.push(publicUrlData.publicUrl);
-        } else {
-          console.error(`Sub image ${i} upload error:`, error);
-        }
+    // Upload sub images
+    let subImagesUrls = [];
+    if (req.files?.subImages?.length) {
+      for (const file of req.files.subImages) {
+        subImagesUrls.push(await uploadToSupabase(file, "sub"));
       }
     }
 
     const product = await Product.create({
       name: name.trim(),
       price: Number(price),
-      category,
+
+      // Multi
+      categories:  categoriesArr,
+      healthTypes: healthTypesArr,
+
+      // Legacy single (for old API consumers)
+      category:   categoriesArr[0]  || null,
+      healthType: healthTypesArr[0] || "health",
+
       shortDescription: shortDescription || "",
-      description: description || "",
-      ingredients: ingredients || "",
-      usage: usage || "",
-      disclaimer: disclaimer || "",
-      weight: weight || "",
-      dimensions: dimensions || "",
-      mainImage: mainImageUrl,
-      image: mainImageUrl, // Backward compatibility
-      subImages: subImagesUrls,
-      bestSeller: bestSeller === "true" || bestSeller === true,
-      healthType: healthType || "health",
+      description,
+      ingredients:  ingredients  || "",
+      usage:        usage        || "",
+      disclaimer:   disclaimer   || "",
+      weight:       weight       || "",
+      dimensions:   dimensions   || "",
+      mainImage:    mainImageUrl,
+      image:        mainImageUrl,
+      subImages:    subImagesUrls,
+      bestSeller:   bestSeller === "true" || bestSeller === true,
     });
 
-    const populatedProduct = await Product.findById(product._id).populate("category");
-    
-    res.status(201).json({
-      ...populatedProduct.toObject(),
-      mainImage: populatedProduct.mainImage || populatedProduct.image,
-      subImages: populatedProduct.subImages || []
-    });
-
+    const populated = await populateProduct(Product.findById(product._id));
+    res.status(201).json(formatProduct(populated));
   } catch (err) {
     console.error("Create product error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= UPDATE PRODUCT ================= */
+/* ─────────────────────────────────────────
+   UPDATE PRODUCT
+───────────────────────────────────────── */
 export const updateProduct = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
-
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
+    if (!product) return res.status(404).json({ message: "Product not found" });
 
     const {
-      name,
-      price,
-      category,
-      shortDescription,
-      description,
-      ingredients,
-      usage,
-      disclaimer,
-      weight,
-      dimensions,
-      bestSeller,
-      healthType,
-      existingSubImages,
-      removeMainImage
+      name, price, category, healthType,
+      shortDescription, description,
+      ingredients, usage, disclaimer,
+      weight, dimensions, bestSeller, existingSubImages,
     } = req.body;
 
-    // Update basic fields
-    if (name) product.name = name.trim();
-    if (price) product.price = Number(price);
-    if (category) product.category = category;
+    // Update text fields
+    if (name)                           product.name             = name.trim();
+    if (price)                          product.price            = Number(price);
     if (shortDescription !== undefined) product.shortDescription = shortDescription;
-    if (description) product.description = description;
-    if (ingredients !== undefined) product.ingredients = ingredients;
-    if (usage !== undefined) product.usage = usage;
-    if (disclaimer !== undefined) product.disclaimer = disclaimer;
-    if (weight !== undefined) product.weight = weight;
-    if (dimensions !== undefined) product.dimensions = dimensions;
-    
-    if (bestSeller !== undefined) {
-      product.bestSeller = bestSeller === "true" || bestSeller === true;
-    }
-    
-    if (healthType) product.healthType = healthType;
+    if (description)                    product.description      = description;
+    if (ingredients !== undefined)      product.ingredients      = ingredients;
+    if (usage !== undefined)            product.usage            = usage;
+    if (disclaimer !== undefined)       product.disclaimer       = disclaimer;
+    if (weight !== undefined)           product.weight           = weight;
+    if (dimensions !== undefined)       product.dimensions       = dimensions;
+    if (bestSeller !== undefined)       product.bestSeller       = bestSeller === "true" || bestSeller === true;
 
-    // Handle main image removal
-    if (removeMainImage === "true") {
-      product.mainImage = "";
-      product.image = "";
+    // Multi categories
+    if (req.body.categories !== undefined) {
+      const arr = parseArrayField(req.body.categories, category ? [category] : []);
+      product.categories = arr;
+      product.category   = arr[0] || product.category; // keep legacy in sync
+    } else if (category) {
+      product.category   = category;
+      product.categories = [category];
     }
 
-    // Handle existing sub images
-    if (existingSubImages) {
+    // Multi health types
+    if (req.body.healthTypes !== undefined) {
+      const arr = parseArrayField(req.body.healthTypes, healthType ? [healthType] : []);
+      product.healthTypes = arr;
+      product.healthType  = arr[0] || product.healthType; // keep legacy in sync
+    } else if (healthType) {
+      product.healthType  = healthType;
+      product.healthTypes = [healthType];
+    }
+
+    // Keep existing sub images that weren't removed in UI
+    if (existingSubImages !== undefined) {
       try {
-        const parsedExisting = JSON.parse(existingSubImages);
-        product.subImages = parsedExisting;
-      } catch (e) {
+        product.subImages = JSON.parse(existingSubImages);
+      } catch {
         product.subImages = [];
       }
     }
 
-    /* ===== UPDATE MAIN IMAGE ===== */
-    if (req.files && req.files.mainImage && req.files.mainImage[0]) {
-      const file = req.files.mainImage[0];
-      const fileExt = file.originalname.split('.').pop();
-      const fileName = `main/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      
-      const { error } = await supabase.storage
-        .from("products")
-        .upload(fileName, file.buffer, {
-          contentType: file.mimetype,
-          cacheControl: '3600'
-        });
+    // Upload new main image
+    if (req.files?.mainImage?.[0]) {
+      const url = await uploadToSupabase(req.files.mainImage[0], "main");
+      product.mainImage = url;
+      product.image     = url;
+    }
 
-      if (!error) {
-        const { data: publicUrlData } = supabase.storage
-          .from("products")
-          .getPublicUrl(fileName);
-        
-        product.mainImage = publicUrlData.publicUrl;
-        product.image = publicUrlData.publicUrl;
-      } else {
-        console.error("Main image update error:", error);
+    // Append new sub images
+    if (req.files?.subImages?.length) {
+      for (const file of req.files.subImages) {
+        product.subImages.push(await uploadToSupabase(file, "sub"));
       }
     }
 
-    /* ===== ADD NEW SUB IMAGES ===== */
-    if (req.files && req.files.subImages && req.files.subImages.length > 0) {
-      for (let i = 0; i < req.files.subImages.length; i++) {
-        const file = req.files.subImages[i];
-        const fileExt = file.originalname.split('.').pop();
-        const fileName = `sub/${Date.now()}-${i}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-        
-        const { error } = await supabase.storage
-          .from("products")
-          .upload(fileName, file.buffer, {
-            contentType: file.mimetype,
-            cacheControl: '3600'
-          });
-
-        if (!error) {
-          const { data: publicUrlData } = supabase.storage
-            .from("products")
-            .getPublicUrl(fileName);
-          product.subImages.push(publicUrlData.publicUrl);
-        }
-      }
-    }
-
-    const updatedProduct = await product.save();
-    const populatedProduct = await Product.findById(updatedProduct._id).populate("category");
-
-    res.json({
-      ...populatedProduct.toObject(),
-      mainImage: populatedProduct.mainImage || populatedProduct.image,
-      subImages: populatedProduct.subImages || []
-    });
-
+    const updated   = await product.save();
+    const populated = await populateProduct(Product.findById(updated._id));
+    res.json(formatProduct(populated));
   } catch (err) {
     console.error("Update product error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= DELETE PRODUCT ================= */
+/* ─────────────────────────────────────────
+   DELETE PRODUCT
+───────────────────────────────────────── */
 export const deleteProduct = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
 
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
-
-    // Delete images from Supabase storage
     const imagesToDelete = [];
-    
-    if (product.mainImage) {
-      const mainImagePath = product.mainImage.split('/').pop();
-      imagesToDelete.push(`main/${mainImagePath}`);
-    }
-    
-    if (product.subImages && product.subImages.length > 0) {
-      product.subImages.forEach(image => {
-        const imagePath = image.split('/').pop();
-        imagesToDelete.push(`sub/${imagePath}`);
-      });
-    }
+    const extractPath = (url) => {
+      const parts = url.split("/storage/v1/object/public/products/");
+      return parts[1] || null;
+    };
 
-    // Delete images from storage
+    if (product.mainImage) {
+      const p = extractPath(product.mainImage);
+      if (p) imagesToDelete.push(p);
+    }
+    (product.subImages || []).forEach((img) => {
+      const p = extractPath(img);
+      if (p) imagesToDelete.push(p);
+    });
+
     if (imagesToDelete.length > 0) {
-      const { error } = await supabase.storage
-        .from("products")
-        .remove(imagesToDelete);
-      
-      if (error) {
-        console.error("Error deleting images from storage:", error);
-      }
+      const { error } = await supabase.storage.from("products").remove(imagesToDelete);
+      if (error) console.error("Storage delete error:", error.message);
     }
 
     await Product.findByIdAndDelete(req.params.id);
     res.json({ message: "Product deleted successfully" });
-
   } catch (err) {
     console.error("Delete product error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= ADD REVIEW ================= */
+/* ─────────────────────────────────────────
+   ADD REVIEW
+───────────────────────────────────────── */
 export const addReview = async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
-
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
+    if (!product) return res.status(404).json({ message: "Product not found" });
 
     const { name, rating, comment } = req.body;
-
-    if (!name || !rating || !comment) {
+    if (!name || !rating || !comment)
       return res.status(400).json({ message: "Name, rating, and comment are required" });
-    }
-
-    if (rating < 1 || rating > 5) {
+    if (rating < 1 || rating > 5)
       return res.status(400).json({ message: "Rating must be between 1 and 5" });
-    }
 
-    product.reviews.push({
-      name: name.trim(),
-      rating: Number(rating),
-      comment: comment.trim(),
-    });
+    product.reviews.push({ name: name.trim(), rating: Number(rating), comment: comment.trim() });
 
-    // Calculate new average rating
-    const totalRating = product.reviews.reduce((sum, review) => sum + review.rating, 0);
-    product.averageRating = totalRating / product.reviews.length;
+    const total = product.reviews.reduce((sum, r) => sum + r.rating, 0);
+    product.averageRating = total / product.reviews.length;
 
     await product.save();
-
-    res.json({
-      message: "Review added successfully",
-      reviews: product.reviews,
-      averageRating: product.averageRating
-    });
-
+    res.json({ message: "Review added successfully", reviews: product.reviews, averageRating: product.averageRating });
   } catch (err) {
-    console.error("Add review error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= DELETE REVIEW ================= */
+/* ─────────────────────────────────────────
+   DELETE REVIEW
+───────────────────────────────────────── */
 export const deleteReview = async (req, res) => {
   try {
     const product = await Product.findById(req.params.productId);
+    if (!product) return res.status(404).json({ message: "Product not found" });
 
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
+    const idx = product.reviews.findIndex((r) => r._id.toString() === req.params.reviewId);
+    if (idx === -1) return res.status(404).json({ message: "Review not found" });
 
-    const reviewIndex = product.reviews.findIndex(
-      review => review._id.toString() === req.params.reviewId
-    );
-
-    if (reviewIndex === -1) {
-      return res.status(404).json({ message: "Review not found" });
-    }
-
-    product.reviews.splice(reviewIndex, 1);
-
-    // Recalculate average rating
-    if (product.reviews.length > 0) {
-      const totalRating = product.reviews.reduce((sum, review) => sum + review.rating, 0);
-      product.averageRating = totalRating / product.reviews.length;
-    } else {
-      product.averageRating = 0;
-    }
+    product.reviews.splice(idx, 1);
+    const total = product.reviews.reduce((sum, r) => sum + r.rating, 0);
+    product.averageRating = product.reviews.length ? total / product.reviews.length : 0;
 
     await product.save();
-
-    res.json({
-      message: "Review deleted successfully",
-      reviews: product.reviews,
-      averageRating: product.averageRating
-    });
-
+    res.json({ message: "Review deleted successfully", reviews: product.reviews, averageRating: product.averageRating });
   } catch (err) {
-    console.error("Delete review error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= SEARCH PRODUCTS ================= */
+/* ─────────────────────────────────────────
+   SEARCH PRODUCTS
+───────────────────────────────────────── */
 export const searchProducts = async (req, res) => {
   try {
     const { q } = req.query;
-    
-    if (!q) {
-      return res.status(400).json({ message: "Search query is required" });
-    }
+    if (!q) return res.status(400).json({ message: "Search query is required" });
 
-    const products = await Product.find({
-      $or: [
-        { name: { $regex: q, $options: 'i' } },
-        { description: { $regex: q, $options: 'i' } },
-        { ingredients: { $regex: q, $options: 'i' } },
-        { shortDescription: { $regex: q, $options: 'i' } }
-      ]
-    }).populate("category").limit(50);
+    const products = await populateProduct(
+      Product.find({
+        $or: [
+          { name:             { $regex: q, $options: "i" } },
+          { description:      { $regex: q, $options: "i" } },
+          { ingredients:      { $regex: q, $options: "i" } },
+          { shortDescription: { $regex: q, $options: "i" } },
+        ],
+      }).limit(50)
+    );
 
-    const formattedProducts = products.map(product => ({
-      ...product.toObject(),
-      mainImage: product.mainImage || product.image || "",
-      subImages: product.subImages || []
-    }));
-
-    res.json(formattedProducts);
-
+    res.json(products.map(formatProduct));
   } catch (err) {
-    console.error("Search products error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ================= BULK DELETE PRODUCTS ================= */
+/* ─────────────────────────────────────────
+   BULK DELETE
+───────────────────────────────────────── */
 export const bulkDeleteProducts = async (req, res) => {
   try {
     const { productIds } = req.body;
-
-    if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
-      return res.status(400).json({ message: "Product IDs array is required" });
-    }
+    if (!Array.isArray(productIds) || productIds.length === 0)
+      return res.status(400).json({ message: "productIds array is required" });
 
     const products = await Product.find({ _id: { $in: productIds } });
-    
-    // Collect all image paths for deletion
+
     const imagesToDelete = [];
-    
-    products.forEach(product => {
-      if (product.mainImage) {
-        const mainImagePath = product.mainImage.split('/').pop();
-        imagesToDelete.push(`main/${mainImagePath}`);
+    products.forEach((p) => {
+      const extractPath = (url) => {
+        const parts = url.split("/storage/v1/object/public/products/");
+        return parts[1] || null;
+      };
+      if (p.mainImage) {
+        const path = extractPath(p.mainImage);
+        if (path) imagesToDelete.push(path);
       }
-      
-      if (product.subImages && product.subImages.length > 0) {
-        product.subImages.forEach(image => {
-          const imagePath = image.split('/').pop();
-          imagesToDelete.push(`sub/${imagePath}`);
-        });
-      }
+      (p.subImages || []).forEach((img) => {
+        const path = extractPath(img);
+        if (path) imagesToDelete.push(path);
+      });
     });
 
-    // Delete images from storage
     if (imagesToDelete.length > 0) {
-      const { error } = await supabase.storage
-        .from("products")
-        .remove(imagesToDelete);
-      
-      if (error) {
-        console.error("Error deleting bulk images:", error);
-      }
+      const { error } = await supabase.storage.from("products").remove(imagesToDelete);
+      if (error) console.error("Bulk storage delete error:", error.message);
     }
 
-    // Delete products from database
     await Product.deleteMany({ _id: { $in: productIds } });
-
-    res.json({ 
-      message: `${productIds.length} products deleted successfully`,
-      deletedCount: productIds.length
-    });
-
+    res.json({ message: `${productIds.length} products deleted successfully`, deletedCount: productIds.length });
   } catch (err) {
-    console.error("Bulk delete error:", err);
     res.status(500).json({ message: err.message });
   }
 };

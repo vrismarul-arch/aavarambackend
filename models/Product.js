@@ -13,13 +13,13 @@ const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     price: { type: Number, required: true },
-    
+
     // Main Image
     mainImage: { type: String, default: "" },
-    
+
     // Legacy support for old products
     image: { type: String, default: "" },
-    
+
     // Sub Images Array
     subImages: [{ type: String }],
 
@@ -34,15 +34,31 @@ const productSchema = new mongoose.Schema(
     weight: { type: String, default: "" },
     dimensions: { type: String, default: "" },
 
-    /* ===== CATEGORY ===== */
+    /* ===== CATEGORIES (multi) ===== */
+    categories: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Category",
+      },
+    ],
+
+    // Legacy single category (backward compat)
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Category",
-      required: true,
     },
 
     bestSeller: { type: Boolean, default: false },
-    
+
+    /* ===== HEALTH TYPES (multi) ===== */
+    healthTypes: [
+      {
+        type: String,
+        enum: ["bestseller", "combo", "health"],
+      },
+    ],
+
+    // Legacy single healthType (backward compat)
     healthType: {
       type: String,
       enum: ["bestseller", "combo", "health"],

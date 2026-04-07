@@ -1,3 +1,4 @@
+// routes/productRoutes.js
 import express from "express";
 import {
   getProducts,
@@ -11,9 +12,10 @@ import {
   addReview,
   deleteReview,
   searchProducts,
-  bulkDeleteProducts
+  bulkDeleteProducts,
 } from "../controllers/productController.js";
 
+// ✅ FIXED: import uploadMultiple directly (not as a factory)
 import { uploadMultiple } from "../middleware/upload.js";
 
 const router = express.Router();
@@ -26,7 +28,7 @@ router.get("/health-type/:type", getProductsByHealthType);
 router.get("/category/:categoryId", getProductsByCategory);
 router.get("/:id", getProductById);
 
-// Protected routes (add your auth middleware)
+// ✅ FIXED: uploadMultiple used directly as middleware
 router.post("/", uploadMultiple, createProduct);
 router.put("/:id", uploadMultiple, updateProduct);
 router.delete("/:id", deleteProduct);
