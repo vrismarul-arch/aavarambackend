@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-
+// dfd/
 const adminSchema = new mongoose.Schema({
   name: {
     type: String,
