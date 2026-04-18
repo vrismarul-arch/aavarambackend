@@ -7,9 +7,9 @@ import {
 
 const router = express.Router();
 
-/* IMPORTANT: NO AUTH MIDDLEWARE HERE */
-router.post("/razorpay", createRazorpayOrder);
-router.post("/verify", verifyPayment);
-router.post("/cod", createCODOrder);
+// IMPORTANT: These routes must match the frontend API calls
+router.post("/razorpay", createRazorpayOrder);  // ✅ Frontend calls this
+router.post("/verify", verifyPayment);          // ✅ Frontend calls this
+router.post("/cod", createCODOrder);            // ✅ Frontend calls this
 
 export default router;
